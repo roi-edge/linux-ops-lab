@@ -38,7 +38,7 @@ MySQL → 备份 → rsync → 故障演练 → Docker → Dockerfile → Compos
 | 项 | 值 | 说明 |
 |---|---|---|
 | 虚拟化 | VMware Workstation，**NAT**（VMnet8 = `192.168.9.0/24`） | 网关 `.2`，DHCP 池 `.128`–`.254` |
-| 系统 | Ubuntu 24.04.5 LTS | 最小安装，不要图形界面 |
+| 系统 | Ubuntu 24.04.x LTS | 实测 24.04.5；24.04.3 镜像同样可用 |
 | 规格 | 2 vCPU / 4 GB / 系统盘 20 G | 实测 `/` 用到 8.3 G |
 | 数据盘 | 20 G 挂 `/data`；30 G 给 `/var/lib/docker` | 见 4.8 |
 | 用户 | `madrough`，在 `sudo` 组 | 密码自定 |
@@ -46,6 +46,18 @@ MySQL → 备份 → rsync → 故障演练 → Docker → Dockerfile → Compos
 
 > ⚠️ **本文所有 `192.168.9.50` 要换成你实际的 IP**：
 > `grep -rl 192.168.9.50 configs docs | xargs sed -i 's/192.168.9.50/你的IP/g'`
+
+### 2.1 先把仓库拿到手（第 0 步）
+
+后面所有 `configs/...`、`scripts/...` 都是**相对仓库根目录**的路径。先克隆：
+
+```bash
+sudo apt install -y git            # 约 30 MB；没装才需要
+git clone https://github.com/roi-edge/linux-ops-lab.git ~/lab22
+cd ~/lab22
+```
+
+> **第 4 节的所有命令都默认你在 `~/lab22` 里执行。** 换了一个终端窗口，先 `cd ~/lab22`。
 
 ## 3. 仓库结构
 
@@ -97,6 +109,8 @@ sudo usermod -aG sudo madrough
 sudo systemctl set-default multi-user.target
 ```
 **验证**：从宿主机 `ssh madrough@<IP>`，再 `whoami; sudo -v`。
+> ⚠️ **之后所有步骤都用 `madrough` 身份**：`su - madrough`（要输 madrough 密码）或直接 SSH 登录。
+> `usermod -aG sudo` 是**下次登录才生效**的，刚加完不重新登录，`sudo` 可能还不认。
 
 ### 4.2 静态 IP（约 5 分钟）
 ```bash
@@ -195,12 +209,16 @@ cd ~/lab18 && sudo docker compose up -d
 
 ### 4.10 Ansible（约 5 分钟）
 ```bash
-sudo apt install -y ansible-core        # ⚠️ 约 600 MB，先看磁盘
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519      # 已有则跳过
+ssh-copy-id madrough@192.168.9.50                     # 免密登录
+sudo apt install -y ansible-core                       # ⚠️ 约 600 MB，先看磁盘
 mkdir -p ~/lab20 && cp configs/{inventory,ansible.cfg,site.yaml,bad.yaml} ~/lab20/
-cd ~/lab20 && ansible-playbook site.yaml
+cd ~/lab20 && ansible-playbook site.yaml -K
 ```
 **验证**：第二遍 `changed=0`（幂等）。
-> 前提三件套：SSH 免密、免密 sudo、`ansible.cfg` 在当前目录（`docs/20`）。
+> 三个前提：**SSH 免密**（`ssh-copy-id`）、**`ansible.cfg` 在当前目录**、**`become: true` 需要 sudo 密码**
+> → 所以必须带 `-K`（`--ask-become-pass`，交互输入 sudo 密码）。没配免密 sudo 却忘了 `-K`，会报
+> `Missing sudo password`。`ansible.cfg` 的查找优先级见 `docs/20`。
 
 ### 4.11 巡检脚本（约 5 分钟）★
 ```bash
