@@ -47,17 +47,12 @@ MySQL → 备份 → rsync → 故障演练 → Docker → Dockerfile → Compos
 > ⚠️ **本文所有 `192.168.9.50` 要换成你实际的 IP**：
 > `grep -rl 192.168.9.50 configs docs | xargs sed -i 's/192.168.9.50/你的IP/g'`
 
-### 2.1 先把仓库拿到手（第 0 步）
+### 2.1 前置：一块数据盘
 
-后面所有 `configs/...`、`scripts/...` 都是**相对仓库根目录**的路径。先克隆：
+**在 VMware 里给这台 VM 再加一块 20G 虚拟盘**（第 4.0 步要用）。关机状态加，或热添加后 `lsblk` 确认能看到（如 `sdb`）。
 
-```bash
-sudo apt install -y git            # 约 30 MB；没装才需要
-git clone https://github.com/roi-edge/linux-ops-lab.git ~/lab22
-cd ~/lab22
-```
-
-> **第 4 节的所有命令都默认你在 `~/lab22` 里执行。** 换了一个终端窗口，先 `cd ~/lab22`。
+> 仓库**不在这里克隆**：第 4.1 步建好 `madrough` 之后，用 `madrough` 身份 clone 到 `~/lab22`。
+> 原因：第 4 节之后的所有命令都以 madrough 身份、在 `~/lab22` 里执行；先 clone 成别的用户，切过去就没这个目录了。
 
 ## 3. 仓库结构
 
@@ -90,6 +85,8 @@ cd ~/lab22
 ## 4. 复现步骤（按顺序，标 ★ 的是硬门槛）
 
 ### 4.0 数据盘挂到 `/data`（约 5 分钟，先做）
+> 前提：VM 里已有第二块 20G 盘（见 2.1）。没有就先关机加盘。
+
 ```bash
 lsblk                                   # 确认新盘，例如 sdb（20G）
 sudo mkfs.ext4 /dev/sdb1                 # 已分区则直接格式化；没分区先 fdisk
@@ -111,6 +108,17 @@ sudo systemctl set-default multi-user.target
 **验证**：从宿主机 `ssh madrough@<IP>`，再 `whoami; sudo -v`。
 > ⚠️ **之后所有步骤都用 `madrough` 身份**：`su - madrough`（要输 madrough 密码）或直接 SSH 登录。
 > `usermod -aG sudo` 是**下次登录才生效**的，刚加完不重新登录，`sudo` 可能还不认。
+
+建好用户、切过去之后，**在 madrough 名下克隆仓库**：
+
+```bash
+su - madrough
+sudo apt install -y git
+git clone https://github.com/roi-edge/linux-ops-lab.git ~/lab22
+cd ~/lab22
+```
+
+> 从这一步起，**第 4 节的所有命令都在 `~/lab22` 里、以 madrough 身份执行**。换个终端先 `cd ~/lab22`。
 
 ### 4.2 静态 IP（约 5 分钟）
 ```bash
@@ -193,7 +201,7 @@ sudo cp configs/daemon.json /etc/docker/ && sudo systemctl restart docker
 > ⚠️ **只挪 `/var/lib/docker` 不够**：新版 containerd snapshotter 的主体在 `/var/lib/containerd`，
 > 要额外 bind mount，否则根分区会被吃满（`docs/16`）。`/dev/sdc1` 按你的实际盘名改。
 
-### 4.9 Compose（约 5 分钟）
+### 4.9 Compose（约 5 分钟，**依赖 4.8 的 Docker；没做 4.8 就跳过**）
 ```bash
 mkdir -p ~/lab18 ~/lab17/app /data/docker-html
 cp configs/compose-lab18.yaml ~/lab18/compose.yaml
