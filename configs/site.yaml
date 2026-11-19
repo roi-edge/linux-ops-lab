@@ -1,0 +1,18 @@
+- name: lab20 基础配置
+  hosts: lab
+  become: true
+  tasks:
+    - name: 确保 nginx 已安装
+      apt: {name: nginx, state: present}
+
+    - name: 确保 nginx 运行且开机自启
+      service: {name: nginx, state: started, enabled: true}
+
+    - name: 建运维用户 opsuser
+      user: {name: opsuser, shell: /bin/bash, create_home: true}
+
+    - name: 建站点目录
+      file: {path: /srv/lab20, state: directory, mode: "0755"}
+
+    - name: 部署首页
+      copy: {content: "lab20 DEPLOYED BY ANSIBLE v2\n", dest: /srv/lab20/index.html, mode: "0644"}

@@ -1,0 +1,17 @@
+[Unit]
+Description=Lab05 Heartbeat Demo
+Documentation=file:/usr/local/bin/lab05-heartbeat.sh
+After=network.target
+
+[Service]
+Type=simple
+User=madrough
+ExecStart=/usr/local/bin/lab05-heartbeat.sh
+Restart=always
+RestartSec=3
+TimeoutStopSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,28 @@
+name: lab18
+services:
+  web:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports: ["8089:80"]
+    volumes: ["/data/docker-html:/usr/share/nginx/html:ro"]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+  db:
+    image: mysql:8
+    restart: unless-stopped
+    ports: ["127.0.0.1:3310:3306"]
+    environment:
+      MYSQL_ROOT_PASSWORD: <MYSQL_ROOT_PASSWORD>
+      MYSQL_DATABASE: lab18db
+    volumes: ["lab18-mysql-data:/var/lib/mysql"]
+    healthcheck: {test: ["CMD","mysqladmin","ping","-uroot","-p<MYSQL_ROOT_PASSWORD>"], interval: 10s, timeout: 5s, retries: 5, start_period: 40s}
+    logging: {driver: json-file, options: {max-size: "10m"}}
+  inspect:
+    build: ../lab17/app
+    restart: "no"
+    depends_on: {db: {condition: service_healthy}}
+    command: ["sh","-c","echo '--- DNS ---'; getent hosts web db; echo '--- web ---'; wget -qO- http://web/ | head -3; echo '--- db ---'; nc -z -w 2 db 3306 && echo 'db:3306 OK' || echo 'db:3306 FAIL'"]
+volumes:
+  lab18-mysql-data:
+networks:
+  default:
+    name: lab18net

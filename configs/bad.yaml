@@ -1,0 +1,5 @@
+- hosts: lab
+  become: true
+  tasks:
+    - name: 反例：用 shell 模块装包
+      shell: apt-get install -y nginx

@@ -1,0 +1,7 @@
+FROM ubuntu:24.04
+RUN apt-get update
+RUN apt-get install -y curl procps iproute2 net-tools vim
+RUN mkdir /app
+COPY inspect.sh /app/inspect.sh
+RUN chmod +x /app/inspect.sh
+CMD ["/app/inspect.sh"]

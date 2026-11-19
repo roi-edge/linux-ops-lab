@@ -1,0 +1,10 @@
+/var/log/dnsmasq.log {
+    su root syslog
+    daily
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}

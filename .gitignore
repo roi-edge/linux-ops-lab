@@ -1,0 +1,13 @@
+# 凭证：永不入仓
+backup.cnf
+*.key
+*.pem
+.env
+*.env
+vault-pass*
+# 运行时/临时产物
+*.log
+*.sql
+*.sql.gz
+*.swp
+*.bak
