@@ -84,18 +84,24 @@ MySQL → 备份 → rsync → 故障演练 → Docker → Dockerfile → Compos
 
 ## 4. 复现步骤（按顺序，标 ★ 的是硬门槛）
 
+> 每个块的第一行都是 `cd ~/lab22`：**每次重新 SSH 登录，工作目录都会回到 `~`**，不 `cd` 就找不到 `configs/`。
+
 ### 4.0 数据盘挂到 `/data`（约 5 分钟，先做）
 > 前提：VM 里已有第二块 20G 盘（见 2.1）。没有就先关机加盘。
 
 ```bash
-lsblk                                   # 确认新盘，例如 sdb（20G）
-sudo mkfs.ext4 /dev/sdb1                 # 已分区则直接格式化；没分区先 fdisk
+lsblk                                   # 只有 sda 时，先热添加盘再往下
+for h in /sys/class/scsi_host/host*/scan; do echo "- - -" | sudo tee $h; done
+lsblk                                   # 应出现 sdb（20G，无分区）
+printf 'n\np\n1\n\n\nw\n' | sudo fdisk /dev/sdb   # 新建 1 个主分区
+sudo mkfs.ext4 /dev/sdb1
 sudo mkdir -p /data
 echo "UUID=$(sudo blkid -s UUID -o value /dev/sdb1) /data ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab
 sudo systemctl daemon-reload && sudo mount -a
 ```
-**验证**：`df -h /data` 有 20G；`findmnt /data`。
-> **`nofail` 不能省**：写错或盘掉了，没有它系统会卡在 `local-fs.target` 进 emergency（`docs/03`、`docs/15`）。
+**验证**：`df -h /data` 有 20G；`grep /data /etc/fstab` 里带 `nofail`。
+> `nofail` 不能省：写错或盘掉了，没有它系统会卡在 `local-fs.target` 进 emergency（`docs/03`、`docs/15`）。
+> 热添加的盘内核不会自动认，必须写 `scan` 触发重扫。
 
 ### 4.1 系统与 SSH（约 5 分钟）
 ```bash
@@ -121,35 +127,55 @@ cd ~/lab22
 > 从这一步起，**第 4 节的所有命令都在 `~/lab22` 里、以 madrough 身份执行**。换个终端先 `cd ~/lab22`。
 
 ### 4.2 静态 IP（约 5 分钟）
+> ⚠️ **顺序有坑**：这一步把 DNS 指向 `127.0.0.1`，而 dnsmasq 在 **4.3 才装** → `apt` 会解析失败。
+> **要么先做 4.3 再做 4.2**，要么照 4.3 开头的 `resolvectl` 临时救一下。
+
 ```bash
+cd ~/lab22
 sudo cp configs/90-lab11.yaml /etc/netplan/
-sudo netplan try          # 在 VMware 控制台里执行，SSH 里改必断
+sudo netplan generate     # 只编译、先验语法
+sudo netplan apply        # 真正生效；SSH 会立刻断开
 ```
-**验证**：`ip -4 a show ens33` 是 `192.168.9.50/24`；`ip route` 有 `default via 192.168.9.2`。
-> 详细坑（cloud-init 覆盖、`try` 回滚不删文件）见 `docs/11-静态IP.md`。
+
+**断线是正常的**，重新 `ssh madrough@<IP>` 即可。
+> 同一个 IP 换过机器时，SSH 会因**主机密钥变化**拒绝连接（`WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED`）。
+> 解决：`ssh-keygen -R 192.168.9.50` 清掉旧指纹再连。**这是实测踩到的，原 README 漏了。**
+
+**验证**：`ip -br a` 显示 `192.168.9.50/24`；`ip route` 有 `default via 192.168.9.2`。
+> 为什么不用 `netplan try`：它要在运行它的那个终端里按回车确认，SSH 一断就按不到、10 秒自动回滚。
+> 用 `apply` + 重连更直接。详细坑（cloud-init 覆盖、`try` 回滚不删文件）见 `docs/11-静态IP.md`。
 
 ### 4.3 自建 DNS（约 10 分钟）
 ```bash
+cd ~/lab22
+sudo resolvectl dns ens33 192.168.9.2      # 临时救 DNS（4.2 已把入口指到还没起来的 127.0.0.1）
 sudo apt install -y dnsmasq
 sudo cp configs/lab10.conf /etc/dnsmasq.d/
 sudo systemctl restart dnsmasq && systemctl is-active dnsmasq
+sudo resolvectl dns ens33 127.0.0.1        # 交还给自建 DNS
+dig +short www.lab.local @192.168.9.50
 ```
-**验证**：`dig +short www.lab.local @127.0.0.1` → `192.168.9.50`。
+**验证**：`dig` 输出 `192.168.9.50`；`sudo ss -tlnp | grep ':53 '` 能看到 dnsmasq 监听 `.50:53`。
 
 关键点：netplan 里 DNS 只写 `127.0.0.1` **一个入口**，上游冗余放进 dnsmasq 的 `server=`。
 > 为什么不能写两个入口：`docs/11` 的"开机竞速"。
 
 ### 4.4 nginx 两站点（约 10 分钟）
 ```bash
+cd ~/lab22
 sudo apt install -y nginx
-sudo mkdir -p /var/www/lab1 && echo '<h1>lab1</h1>' | sudo tee /var/www/lab1/index.html
+sudo mkdir -p /var/www/lab1 /var/www/lab2
+echo '<h1>lab1-static</h1>' | sudo tee /var/www/lab1/index.html
+echo '<h1>lab2-backend</h1>' | sudo tee /var/www/lab2/index.html
 sudo cp configs/lab1.conf configs/lab2.conf /etc/nginx/sites-available/
-sudo ln -s /etc/nginx/sites-available/lab1.conf /etc/nginx/sites-enabled/
-sudo ln -s /etc/nginx/sites-available/lab2.conf /etc/nginx/sites-enabled/
+sudo ln -sf /etc/nginx/sites-available/lab1.conf /etc/nginx/sites-enabled/
+sudo ln -sf /etc/nginx/sites-available/lab2.conf /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
-python3 -m http.server 8080 --bind 127.0.0.1 --directory /var/www/lab1 &
+nohup python3 -m http.server 8080 --bind 127.0.0.1 --directory /var/www/lab2 >/tmp/http8080.log 2>&1 &
 ```
-**验证**：`curl -s -H 'Host: lab1.test' http://127.0.0.1/` 与 `-H 'Host: lab2.test'` 返回不同内容。
+**验证**：`curl -s -H 'Host: lab1.test' http://127.0.0.1/` 与 `-H 'Host: lab2.test'` 返回**不同内容**。
+> **两个站点必须两套内容**：后端也指向 `/var/www/lab1` 的话两边输出一模一样，"返回不同内容"根本验不出来（实测发现）。
+> `nohup` 不能省：SSH 一断，没 `nohup` 的后台进程会跟着死，`lab2.test` 立刻 502。
 > `server_name` 匹配的是 `Host` 头，不是 DNS；后端必须 `--bind 127.0.0.1`（`docs/08`）。
 
 ### 4.5 防火墙（约 5 分钟）★
@@ -184,7 +210,8 @@ sudo mysql -e "CREATE USER 'bkp'@'localhost' IDENTIFIED BY '<BACKUP_PASSWORD>'; 
 printf '[client]\nuser=bkp\npassword=<BACKUP_PASSWORD>\n' | sudo tee /etc/mysql/backup.cnf >/dev/null
 sudo chmod 600 /etc/mysql/backup.cnf
 ```
-**验证**：`sudo /usr/local/bin/mysql-backup.sh` 后 `ls -l /data/backup/mysql/`；`zcat 最新.sql.gz | tail -1` 看到 `Dump completed`。
+**验证**：`sudo /usr/local/bin/mysql-backup.sh` 后 `ls -l /data/backup/mysql/`；`sudo zcat 最新.sql.gz | tail -1` 看到 `Dump completed`。
+> 备份文件是 **600 root**，验证也要 `sudo`，否则 `zcat: Permission denied`（实测踩到）。
 > 密码替换 + 三重校验 + `find -mtime +6`，见 `docs/13`；rsync 见 `docs/14`（`-aHA`、`--delete` 前先 `-n`）。
 
 ### 4.8 Docker + 数据盘（约 10 分钟，**最费时，可跳过**）
@@ -250,6 +277,10 @@ sudo install -m 755 scripts/lab21-healthcheck.sh /usr/local/bin/
 | 8 | **上游把 TTL 压到 5 秒** | 本环境做不了缓存命中率类实验；判断缓存要看 TTL，且两次 `dig` 要放进同一个 shell 行 |
 | 9 | **`snap remove --revision` 不省空间** | snapd 会把镜像搬进 `/var/lib/snapd/cache` 保回滚，删了也会被填回 |
 | 10 | **`mysqldump` 报 Error 但退出码 0** | 判成功要三层：退出码 + stderr 无 Error + 产物里有 `Dump completed` |
+| 11 | **同 IP 换机器后 SSH 拒绝连接** | 主机密钥变了。`ssh-keygen -R <IP>` 清掉 `known_hosts` 旧记录再连（4.2 会改 IP，最容易撞上） |
+| 12 | **静态 IP 设完 apt 解析失败** | 4.2 把 DNS 指到 `127.0.0.1`，而 dnsmasq 4.3 才装。先 `sudo resolvectl dns ens33 <网关>` 临时救 DNS |
+| 13 | **热添加的磁盘 `lsblk` 看不到** | 往 `/sys/class/scsi_host/host*/scan` 写 `- - -` 触发重扫（4.0） |
+| 14 | **后台服务 SSH 断开就没了** | 用 `nohup cmd >/tmp/x.log 2>&1 &`，否则 `lab2.test` 立刻 502（4.4） |
 
 ## 6. 密码与脱敏
 
